@@ -267,12 +267,12 @@ int main(int argc, char** argv) {
     }
 
     if (n >= 3) {
-    if (rank==0) std::cout<<"=== Creating GHZ state (H0 -> CNOT(0,1) -> CNOT(1,2)) ===\n";
+    if (rank==0) std::cout<<"=== Creating GHZ state (H0 -> CNOT(0,1) -> CNOT(1,2) -> CNOT(2,3)) ===\n";
 
-    apply_single_qubit_distributed(ds, hadamard_matrix(), 0, comm);
-        // Apply CNOT with control=0, target=1
-    apply_cnot_distributed(ds, 1, 0, comm);
-    apply_cnot_distributed(ds, 2, 1, comm);
+    apply_single_qubit_distributed(ds, hadamard_matrix(), 0, comm); // H on q0
+    apply_cnot_distributed(ds, 0, 1, comm); // CNOT(control=0,target=1)
+    apply_cnot_distributed(ds, 1, 2, comm); // CNOT(control=1,target=2)
+    apply_cnot_distributed(ds, 2, 3, comm);
 
     if (rank==0) std::cout<<"State after GHZ creation:\n";
     print_state(ds, comm);
