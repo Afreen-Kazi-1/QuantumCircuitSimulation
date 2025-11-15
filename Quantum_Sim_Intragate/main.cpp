@@ -27,23 +27,13 @@ inline int bit_of(uint64_t idx, uint32_t k) {
     return (idx >> k) & 1ULL;
 }
 
-// Apply single-qubit gate (2x2) on qubit 'target' in distributed state.
-// This is the dense state approach: for each amplitude we update using partner index (flip bit).
-// We do the update in-place using a temporary buffer to avoid race.
 void apply_single_qubit_distributed(DistState &ds, const std::array<cpx,4> &mat, uint32_t target, MPI_Comm comm = MPI_COMM_WORLD) {
-    // Each amplitude new_val = sum_{b in {0,1}} M[row][col]*old_amplitude
-    // Partners are identical except bit target flipped.
-    // Loop local indices, compute partner global index, find partner's amplitude (maybe remote)
-    // Simplification: we implement pairwise exchange via MPI_Alltoallv-pattern for partners residing on different ranks.
-    // But simpler and portable: perform local compute when both partner indices are local, otherwise perform an MPI exchange of required remote partners.
     uint64_t local_n = ds.local_size;
     vcpx new_local(local_n);
 
     uint32_t k = target;
     // Fast path: if partner of each local index stays on same rank -> no communication
     bool all_local = true;
-    // partner of local offset is local_offset ^ (1<<k) ??? Careful: partner of a global index g = g ^ (1<<k).
-    // If (global_offset .. global_offset+local_n-1) xor (1<<k) falls in same rank range for all, no comm.
     uint64_t mask = 1ULL << k;
     uint64_t start = ds.local_offset;
     uint64_t end = ds.local_offset + local_n - 1;
@@ -63,10 +53,8 @@ void apply_single_qubit_distributed(DistState &ds, const std::array<cpx,4> &mat,
             uint64_t gi = ds.global_index(li);
             uint64_t partner_g = gi ^ mask;
             uint64_t partner_l = partner_g - ds.local_offset;
-            int row = bit_of(gi, k); // 0 or 1 -> row index
-            // compute new amplitude at gi: sum_{col=0,1} M[row*2 + col] * old[col_amplitude]
-            cpx a0 = ds.state[ (bit_of(gi,k) ? partner_l : li) ]; // careful: but simpler compute explicitly:
-            // More robust: if bit at k is 0: state[gi] = M00*old[gi] + M01*old[partner]
+            int row = bit_of(gi, k); 
+            cpx a0 = ds.state[ (bit_of(gi,k) ? partner_l : li) ];
             if (bit_of(gi,k) == 0) {
                 cpx s0 = mat[0] * ds.state[li] + mat[1] * ds.state[partner_l];
                 new_local[li] = s0;
@@ -76,11 +64,6 @@ void apply_single_qubit_distributed(DistState &ds, const std::array<cpx,4> &mat,
             }
         }
     } else {
-        // General approach:
-        // For each local element, partner might be remote. We'll gather all partner amplitudes by
-        // creating a vector of (rank -> indices) to request, perform MPI exchanges. To keep code short
-        // and understandable, we'll do an allgather of the whole state (inefficient but simple).
-        // This is fine for small qubit counts and demonstration; replace with targeted exchange for scale.
         vcpx full_state;
         if (ds.world_rank == 0) {
             // root collects full state into full_state
@@ -111,8 +94,6 @@ void apply_single_qubit_distributed(DistState &ds, const std::array<cpx,4> &mat,
 
 // Apply CNOT with control and target (control != target)
 void apply_cnot_distributed(DistState &ds, uint32_t control, uint32_t target, MPI_Comm comm = MPI_COMM_WORLD) {
-    // CNOT flips target bit if control bit == 1.
-    // For each amplitude index gi: if bit(control)==1, swap amplitude between gi and gi ^ (1<<target)
     uint64_t local_n = ds.local_size;
     uint64_t mask_t = 1ULL << target;
     uint64_t mask_c = 1ULL << control;
@@ -161,9 +142,7 @@ void apply_cnot_distributed(DistState &ds, uint32_t control, uint32_t target, MP
     ds.state.swap(new_local);
 }
 
-// Measure & collapse: do a single-shot measurement of all qubits (returns measured integer)
 uint64_t measure_all(DistState &ds, MPI_Comm comm = MPI_COMM_WORLD) {
-    // compute local probabilities (|a|^2)
     double local_sum = 0.0;
     for (uint64_t i = 0; i < ds.local_size; ++i) local_sum += std::norm(ds.state[i]);
     double global_sum = 0.0;
